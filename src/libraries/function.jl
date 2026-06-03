@@ -36,6 +36,56 @@ function _sanitize_wrapper_description(name::Symbol, description::AbstractString
     return join(lines[1:min(length(lines), 3)], "\n")
 end
 
+function _runtime_arg_tuple_type(inputs_)
+    return Tuple{map(typeof, inputs_)...}
+end
+
+function _declared_input_types_for_debug(fn_like)
+    if hasfield(typeof(fn_like), :input_types)
+        return try
+            getfield(fn_like, :input_types)
+        catch
+            nothing
+        end
+    end
+    return nothing
+end
+
+function _declared_argument_names_for_debug(fn_like)
+    if hasfield(typeof(fn_like), :argument_names)
+        return try
+            getfield(fn_like, :argument_names)
+        catch
+            nothing
+        end
+    end
+    return nothing
+end
+
+function _which_debug_string(fn_like, tuple_type)
+    try
+        return string(which(fn_like, tuple_type))
+    catch err
+        return "ERROR: " * sprint(showerror, err)
+    end
+end
+
+function _hasmethod_debug_value(fn_like, tuple_type)
+    try
+        return Base.hasmethod(fn_like, tuple_type)
+    catch err
+        return "ERROR: " * sprint(showerror, err)
+    end
+end
+
+function _method_signatures_for_debug(fn_like)
+    try
+        return sprint(show, methods(fn_like))
+    catch err
+        return "ERROR: " * sprint(showerror, err)
+    end
+end
+
 mutable struct FunctionWrapper{T} <: AbstractFunction
     name::Symbol
     description::String
@@ -240,7 +290,17 @@ function evaluate_fn_wrapper(
                         if isdefined(Main, :Infiltrator)
                             Main.infiltrate(@__MODULE__, Base.@locals, @__FILE__, @__LINE__)
                         end
-                        @warn "$(fn_wrapper.name) got a MethodError with inputs of type $(typeof.(inputs_))"
+                        tuple_type = _runtime_arg_tuple_type(inputs_)
+                        @warn "$(fn_wrapper.name) got a MethodError with inputs of type $(typeof.(inputs_))" fn_name =
+                            fn_wrapper.name parent_module =
+                            fn_wrapper.parent_module real_input_types =
+                            typeof.(inputs_) runtime_tuple_type =
+                            tuple_type declared_argument_names =
+                            _declared_argument_names_for_debug(fn_wrapper.fn) declared_input_types =
+                            _declared_input_types_for_debug(fn_wrapper.fn) hasmethod_on_runtime_types =
+                            _hasmethod_debug_value(fn_wrapper.fn, tuple_type) which_on_runtime_types =
+                            _which_debug_string(fn_wrapper.fn, tuple_type) available_methods =
+                            _method_signatures_for_debug(fn_wrapper.fn)
                     end
                     @timeit_debug to "Eval fn Nok $(fn_wrapper.name)" fn_wrapper.fallback()
                 end

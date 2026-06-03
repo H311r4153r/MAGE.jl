@@ -23,6 +23,7 @@ module UTCGP
     using Logging
     using LinearAlgebra
     using StatsBase
+    import Downloads
 
     using TimerOutputs
     const debuglogger = ConsoleLogger(stderr, right_justify = 10)
@@ -599,7 +600,18 @@ module UTCGP
     # MODULAR
     include("libraries/modular_function.jl")
     include("libraries/modular_library.jl")
+    include("libraries/llm_generated_functions.jl")
     include("libraries/subgraph_selection.jl")
+    export GeneratedFunctionSpec, GeneratedFunctionValidationReport
+    export GeneratedFunctionArtifact, GeneratedFunctionAttempt
+    export GeneratedFunctionSynthesisResult, SourceBackedFunction
+    export AbstractGeneratedFunctionClient, OllamaGeneratedFunctionClient
+    export make_llm_generated_function_client
+    export generated_function_bindings, render_generated_function_source
+    export compile_generated_function, validate_generated_function
+    export generated_function_library_index, install_generated_function!
+    export render_generated_function_context, synthesize_validated_function
+    export generate_function_spec, repair_function_spec
 
     # AUTOMATICALLY DEFINED FUNCTIONS
     include("adf/types.jl")
