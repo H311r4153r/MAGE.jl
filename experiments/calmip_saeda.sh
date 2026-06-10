@@ -19,19 +19,30 @@
 #   sbatch --array=1-25 --export=PROBLEM=fuel-cost   experiments/calmip_saeda.sh
 #
 # --------------------------------------------------------------------------
-# ONE-TIME SETUP ON CALMIP (do this once on a login node before the first sbatch)
+# ONE-TIME SETUP (already done if you followed the README; here for reference)
 #
-#   module purge && module load intel/18.2 intelmpi/18.2 julia/1.10.5
-#   cd $HOME/<path>/MAGE.jl
-#   julia --project=. -e 'using Pkg; Pkg.instantiate()'  # requires team's private registry
-#                                                       # for SearchNetworks etc.
-#   # Build PyCall against your Python that has the `psb2` package installed:
-#   export UTCGP_PYTHON=/path/to/python  # the one with psb2
-#   julia --project=. -e 'using Pkg; ENV["PYTHON"]=ENV["UTCGP_PYTHON"]; Pkg.build("PyCall")'
+#   module purge && module load intel/18.2 intelmpi/18.2 julia/1.10.5 python/3.11
+#   python3 -m venv $HOME/envs/psb2-venv
+#   source $HOME/envs/psb2-venv/bin/activate
+#   pip install --only-binary=:all: "numpy<2"
+#   pip install psb2
+#   deactivate
 #
-# PSB2 dataset path must be set so the Python loader finds the JSON files:
-#   export UTCGP_PSB2_DATASET_PATH=$HOME/datasets/psb2-data
+#   cd $HOME/projects/MAGE-saeda
+#   # Patch TestImages's broken build script (one-time):
+#   TI_DIR=$(ls -d ~/.julia/packages/TestImages/*/ | head -1)
+#   echo "# build skipped" > "$TI_DIR/deps/build.jl"
 #
+#   export UTCGP_PYTHON=$HOME/envs/psb2-venv/bin/python
+#   julia --project=. -e '
+#     using Pkg
+#     Pkg.add(name="TestImages", version="1.9")
+#     Pkg.add(url="https://github.com/camilodlt/SearchNetworks.jl")
+#     Pkg.add("PyCall")
+#     Pkg.instantiate()
+#     ENV["PYTHON"] = ENV["UTCGP_PYTHON"]
+#     Pkg.build("PyCall")
+#   '
 # --------------------------------------------------------------------------
 
 #SBATCH --job-name=saeda-mage
@@ -46,10 +57,10 @@
 # #SBATCH --mail-user=you@example.fr
 
 set -euo pipefail
-mkdir -p logs metrics exports
+mkdir -p logs metrics exports metrics/_configs
 
 # ============================================================
-# Tweakable parameters — each overridable via `sbatch --export=NAME=VALUE,...`
+# Tweakable SA-EDA parameters — each overridable via `sbatch --export=...`
 # ============================================================
 : "${PROBLEM:=fuel-cost}"      # fuel-cost | fizz-buzz | coin-sums | luhn |
                                 # mastermind | spin-words | square-digits | twitter
@@ -63,9 +74,10 @@ mkdir -p logs metrics exports
 : "${USE_BLOCK_CAT:=true}"     # block-categorical per CGP node (joint over function + slots)
 : "${ELITE_SIZE:=}"            # auto = max(POP/3, 3) when empty
 
-# Environment for MAGE's Python data loader. Override these in submission if
-# CALMIP exposes them under different paths.
-: "${UTCGP_PYTHON:=/usr/bin/python3}"
+# Environment for MAGE's Python data loader. Defaults match the one-time-setup
+# above; if you put psb2 somewhere else, override via --export or via your
+# ~/.bashrc on CALMIP.
+: "${UTCGP_PYTHON:=$HOME/envs/psb2-venv/bin/python}"
 : "${UTCGP_PSB2_DATASET_PATH:=$HOME/datasets/psb2-data}"
 
 SEED="${SLURM_ARRAY_TASK_ID:-1}"
@@ -73,24 +85,36 @@ JOBID="${SLURM_ARRAY_JOB_ID:-local}"
 
 # ============================================================
 # CALMIP module + environment setup
+# Compute nodes don't inherit login-shell modules, so reload everything here.
 # ============================================================
 module purge
 module load intel/18.2 intelmpi/18.2
-module load julia/1.10.5             # use the same Julia as for the sa-eda-cgp setup
+module load julia/1.10.5
+module load python/3.11        # so the venv's python binary remains callable
+
+# Belt-and-braces: pin the julia binary absolute path. CALMIP's older srun
+# was stripping $PATH inside MPI-launched tasks; we don't use srun here but
+# this is harmless and lets you copy-paste the same script into an MPI variant
+# later if the algorithm gains a distributed mode.
+JULIA_BIN=$(which julia)
 
 echo "--- module status ---"
 module list 2>&1
-echo "--- julia on PATH? ---"
-which julia 2>&1 || { echo "julia NOT on PATH"; exit 2; }
-julia --version 2>&1
+echo "--- julia ---"
+echo "  binary: $JULIA_BIN"
+"$JULIA_BIN" --version
+echo "--- python (UTCGP_PYTHON) ---"
+echo "  binary: $UTCGP_PYTHON"
+"$UTCGP_PYTHON" -c "import sys, psb2; print('python:', sys.version.split()[0], '  psb2 ok')" \
+    || { echo "ERROR: $UTCGP_PYTHON cannot import psb2"; exit 3; }
+echo "--- end diagnostics ---"
 
 cd "$SLURM_SUBMIT_DIR"
 
 # ============================================================
-# Per-job config record (so we can map JOBID -> hyperparameters later)
+# Per-job config record — maps JOBID back to hyperparameters
 # ============================================================
 if [ "${SLURM_ARRAY_TASK_ID:-1}" = "1" ]; then
-    mkdir -p metrics/_configs
     {
         echo "jobid=$JOBID"
         echo "problem=$PROBLEM"
@@ -98,6 +122,7 @@ if [ "${SLURM_ARRAY_TASK_ID:-1}" = "1" ]; then
         echo "carry=$CARRY  uniform_fraction=$UNIFORM_FRACTION  perturb_fraction=$PERTURB_FRACTION"
         echo "use_block_cat=$USE_BLOCK_CAT  elite_size=${ELITE_SIZE:-auto}"
         echo "python=$UTCGP_PYTHON  psb2=$UTCGP_PSB2_DATASET_PATH"
+        echo "submitted=$(date -Is)"
     } > "metrics/_configs/${PROBLEM}_saeda_${JOBID}.config"
 fi
 
@@ -117,6 +142,6 @@ echo "  use_block_cat=$USE_BLOCK_CAT  elite_size=${ELITE_SIZE:-auto}"
 echo "================================================================"
 
 # Run. `--seed N` is parsed by args_parse() inside problems/utils/utils_psb2.jl.
-julia --project=. \
-      "problems/saeda-${PROBLEM}.jl" \
-      --seed "$SEED"
+"$JULIA_BIN" --project=. \
+             "problems/saeda-${PROBLEM}.jl" \
+             --seed "$SEED"
