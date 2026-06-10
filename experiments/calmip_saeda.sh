@@ -90,7 +90,9 @@ JOBID="${SLURM_ARRAY_JOB_ID:-local}"
 module purge
 module load intel/18.2 intelmpi/18.2
 module load julia/1.10.5
-module load python/3.11        # so the venv's python binary remains callable
+# (No python module load — the venv's python binary is self-contained.
+#  Add a `module avail python` step and adjust here if your venv ever
+#  starts complaining about a missing system Python.)
 
 # Belt-and-braces: pin the julia binary absolute path. CALMIP's older srun
 # was stripping $PATH inside MPI-launched tasks; we don't use srun here but
