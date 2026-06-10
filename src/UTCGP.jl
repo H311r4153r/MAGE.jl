@@ -631,4 +631,8 @@ module UTCGP
     # EXT PYCMA
     include("ext.jl")
     export make_cma_nodes!, get_cma_nodes, mutate_cma!
+
+    # SA-EDA search strategy (third alternative alongside 1+λ EA / MCTS)
+    include("saeda/SAEDA.jl")
+    export SAEDA
 end

@@ -1,7 +1,7 @@
 name = "UTCGP"
 uuid = "956831e1-0a7a-492a-ae16-058c6128a9f2"
-authors = ["Anonymous and contributors"]
 version = "1.0.3-DEV"
+authors = ["Anonymous and contributors"]
 
 [deps]
 AbstractTrees = "1520ce14-60c1-5f80-bbc7-55ef81b5835c"
@@ -78,11 +78,12 @@ MAGE_PYCMA = "f841c201-f6fd-4ce3-a497-54af563fbcd3"
 MAGE_PYCMA_EXT = "MAGE_PYCMA"
 
 [compat]
-julia = "1.10"
 DataFlowTasks = ">=0.2.0"
 Delaunator = ">=0.1.2"
 DelaunayTriangulation = ">=1.6.4"
 DispatchDoctor = ">=0.4.26"
+SearchNetworks = "1.0.0"
+julia = "1.10"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
