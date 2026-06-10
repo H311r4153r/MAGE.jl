@@ -43,7 +43,10 @@ function fit_SAEDA_problem(
     perturb_f   = parse(Float64,get(ENV, "PERTURB_FRACTION", "0.2"))
     use_blockc  = parse(Bool,   get(ENV, "USE_BLOCK_CAT",    "true"))
     seed_       = parse(Int,    get(ENV, "SEED",             "1"))
-    elite_size  = parse(Int,    get(ENV, "ELITE_SIZE",       string(max(pop_size ÷ 3, 3))))
+    # ELITE_SIZE may be set to empty string in the SLURM script to mean "auto" —
+    # only call parse() when it's a non-empty digit string.
+    elite_size_raw = get(ENV, "ELITE_SIZE", "")
+    elite_size  = isempty(strip(elite_size_raw)) ? max(pop_size ÷ 3, 3) : parse(Int, elite_size_raw)
 
     @warn "SA-EDA config: pop=$pop_size K=$sa_steps iters=$iterations lr=$lr carry=$carry uniform_f=$uniform_f perturb_f=$perturb_f use_block_cat=$use_blockc seed=$seed_"
 
