@@ -10,6 +10,7 @@ import UTCGP: SAEDA
 using Dates
 using Random
 using Logging
+# MPI is loaded lazily — only required when USE_MPI=true.
 
 """
     fit_SAEDA_problem(shared_inputs, genome, model_arch, node_config,
@@ -68,9 +69,41 @@ function fit_SAEDA_problem(
         perturb_fraction=perturb_f, elite_carryover=carry, seed=seed_,
     )
 
+    # Dispatch: USE_MPI=true → distributed loop, else serial.
+    use_mpi = parse(Bool, get(ENV, "USE_MPI", "false"))
+
+    # Initialise MPI if needed. We accept being called inside an already-
+    # initialised MPI environment too (some launchers do this for you).
+    if use_mpi
+        @eval Main using MPI
+        if !Main.MPI.Initialized()
+            Main.MPI.Init()
+        end
+    end
+    is_master = !use_mpi || Main.MPI.Comm_rank(Main.MPI.COMM_WORLD) == 0
+
     start = now()
-    result = SAEDA.fit_SAEDA(genome, ctx, cfg; use_block_cat=use_blockc)
+    result = if use_mpi
+        is_master && @warn "SA-EDA: distributed mode (MPI), $(Main.MPI.Comm_size(Main.MPI.COMM_WORLD)) ranks"
+        SAEDA.fit_SAEDA_mpi(genome, ctx, cfg; use_block_cat=use_blockc)
+    else
+        @warn "SA-EDA: serial mode"
+        SAEDA.fit_SAEDA(genome, ctx, cfg; use_block_cat=use_blockc)
+    end
     wall = (now() - start) / Second(1)
+
+    # In MPI mode, only the master rank gets a non-nothing result. Workers
+    # synchronize here, then return early so they don't try to write trackers
+    # or CSV rows.
+    if !is_master
+        if use_mpi
+            Main.MPI.Barrier(Main.MPI.COMM_WORLD)
+            if !Main.MPI.Finalized()
+                Main.MPI.Finalize()
+            end
+        end
+        return (nothing, NaN, Float64[], Float64[], 0, wall)
+    end
 
     @warn "SA-EDA finished: best_loss=$(result.best_loss)  evals=$(result.evaluations)  wall=$(wall) s"
 
@@ -85,6 +118,70 @@ function fit_SAEDA_problem(
             end
         catch e
             @warn "metric tracker write failed (continuing): $e"
+        end
+    end
+
+    # Held-out test loss: evaluate the best genome against X_test/Y_test using
+    # the same decoder pipeline. This is the column we need for
+    # paper-comparable results.
+    test_loss = try
+        test_ctx = SAEDA.SAEDAFitnessContext(
+            shared_inputs=shared_inputs,
+            model_architecture=model_architecture,
+            node_config=node_config,
+            run_config=run_config,
+            meta_library=meta_library,
+            decoding_callbacks=decoding_callbacks,
+            X_train=X_test, Y_train=Y_test,    # reuse the same fitness machinery
+            endpoint=endpoint,
+        )
+        SAEDA.saeda_fitness(test_ctx, result.best_genome)
+    catch e
+        @warn "test-loss evaluation failed: $e"
+        NaN
+    end
+
+    # CSV emission — one append per run. Schema matches the previous
+    # sa-eda-cgp full_scale_run.jl conventions so downstream aggregation
+    # scripts can stay the same.
+    csv_dir = joinpath(pwd(), "metrics")
+    isdir(csv_dir) || mkpath(csv_dir)
+    problem_name = get(ENV, "PROBLEM", "unknown")
+    csv_path = joinpath(csv_dir, "$(problem_name)_saeda.csv")
+    write_header = !isfile(csv_path)
+    try
+        open(csv_path, "a") do io
+            if write_header
+                println(io, join([
+                    "problem", "method", "seed",
+                    "n_train", "n_test",
+                    "train_loss", "test_loss",
+                    "evaluations", "wall_s",
+                    "pop", "sa_steps", "iters", "lr",
+                    "carry", "uniform_fraction", "perturb_fraction",
+                    "use_block_cat", "elite_size",
+                ], ","))
+            end
+            println(io, join([
+                problem_name, "saeda", seed_,
+                length(X_train), length(X_test),
+                result.best_loss, test_loss,
+                result.evaluations, round(wall; digits=3),
+                pop_size, sa_steps, iterations, lr,
+                carry, uniform_f, perturb_f,
+                use_blockc, elite_size,
+            ], ","))
+        end
+        @warn "CSV row appended to $csv_path"
+    catch e
+        @warn "CSV write failed (continuing): $e"
+    end
+
+    # Tear down MPI on the master rank too (workers already finalized above).
+    if use_mpi
+        Main.MPI.Barrier(Main.MPI.COMM_WORLD)
+        if !Main.MPI.Finalized()
+            Main.MPI.Finalize()
         end
     end
 

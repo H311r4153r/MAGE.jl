@@ -48,7 +48,10 @@
 #SBATCH --job-name=saeda-mage
 #SBATCH --array=1-10                  # seeds 1..10 (override: sbatch --array=1-25)
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1           # single Julia process per array task (no MPI in this port)
+#SBATCH --ntasks-per-node=32          # CGP-friendly: USE_MPI=true uses the first N
+                                      # (set via RANKS env-var); USE_MPI=false ignores
+                                      # the rest. The unused ranks consume slots but
+                                      # don't run Julia.
 #SBATCH --cpus-per-task=1
 #SBATCH --time=04:00:00               # generous for 200k evals; trim if your config is smaller
 #SBATCH --output=logs/saeda-%x-%A_%a.out
@@ -73,6 +76,8 @@ mkdir -p logs metrics exports metrics/_configs
 : "${PERTURB_FRACTION:=0.2}"   # 1/5 of variables perturbed per iter boundary
 : "${USE_BLOCK_CAT:=true}"     # block-categorical per CGP node (joint over function + slots)
 : "${ELITE_SIZE:=}"            # auto = max(POP/3, 3) when empty
+: "${USE_MPI:=true}"           # distribute trajectories across MPI ranks
+: "${RANKS:=14}"               # MPI ranks per array task (only used when USE_MPI=true)
 
 # Environment for MAGE's Python data loader. Defaults match the one-time-setup
 # above; if you put psb2 somewhere else, override via --export or via your
@@ -123,6 +128,7 @@ if [ "${SLURM_ARRAY_TASK_ID:-1}" = "1" ]; then
         echo "pop=$POP  K=$SA_STEPS  iters=$ITERS  lr=$LR"
         echo "carry=$CARRY  uniform_fraction=$UNIFORM_FRACTION  perturb_fraction=$PERTURB_FRACTION"
         echo "use_block_cat=$USE_BLOCK_CAT  elite_size=${ELITE_SIZE:-auto}"
+        echo "use_mpi=$USE_MPI  ranks=$RANKS"
         echo "python=$UTCGP_PYTHON  psb2=$UTCGP_PSB2_DATASET_PATH"
         echo "submitted=$(date -Is)"
     } > "metrics/_configs/${PROBLEM}_saeda_${JOBID}.config"
@@ -134,6 +140,7 @@ fi
 export PROBLEM SEED \
        POP SA_STEPS ITERS LR CARRY UNIFORM_FRACTION PERTURB_FRACTION \
        USE_BLOCK_CAT ELITE_SIZE \
+       USE_MPI RANKS \
        UTCGP_PYTHON UTCGP_PSB2_DATASET_PATH
 
 echo "================================================================"
@@ -141,9 +148,20 @@ echo "JOB ${JOBID} / seed ${SEED}"
 echo "  problem=$PROBLEM  pop=$POP  K=$SA_STEPS  iters=$ITERS  lr=$LR"
 echo "  carry=$CARRY  uniform_fraction=$UNIFORM_FRACTION  perturb_fraction=$PERTURB_FRACTION"
 echo "  use_block_cat=$USE_BLOCK_CAT  elite_size=${ELITE_SIZE:-auto}"
+echo "  use_mpi=$USE_MPI  ranks=$RANKS"
 echo "================================================================"
 
 # Run. `--seed N` is parsed by args_parse() inside problems/utils/utils_psb2.jl.
-"$JULIA_BIN" --project=. \
-             "problems/saeda-${PROBLEM}.jl" \
-             --seed "$SEED"
+# USE_MPI=true → srun with RANKS workers; otherwise plain serial julia call.
+if [ "$USE_MPI" = "true" ]; then
+    echo "Launching with MPI: $RANKS ranks"
+    srun --export=ALL --mpi=pmi2 -n "$RANKS" \
+        "$JULIA_BIN" --project=. \
+                    "problems/saeda-${PROBLEM}.jl" \
+                    --seed "$SEED"
+else
+    echo "Launching serial (USE_MPI=false)"
+    "$JULIA_BIN" --project=. \
+                 "problems/saeda-${PROBLEM}.jl" \
+                 --seed "$SEED"
+fi

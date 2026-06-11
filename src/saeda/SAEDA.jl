@@ -16,12 +16,14 @@ include("distribution.jl")
 include("genome_adapter.jl")
 include("fitness.jl")
 include("algorithm.jl")
+include("mpi.jl")    # requires MPI.jl; users importing UTCGP only pay for it
+                      # at module precompile (no runtime overhead unless invoked)
 
 export AbstractSAEDADistribution, CategoricalVector, BlockCategorical
 export sample, uniform_sample, propose, update!, dim, snapshot, restore!
 export SAEDAFitnessContext, saeda_fitness
 export SAEDAGenomeState, flatten_evolvable_elements, domain_sizes_from_elements,
        get_genes_1based, get_genes_1based!, set_genes_1based!
-export SAEDAConfig, SAEDARunResult, fit_SAEDA, cgp_block_layout
+export SAEDAConfig, SAEDARunResult, fit_SAEDA, fit_SAEDA_mpi, cgp_block_layout
 
 end # module SAEDA
